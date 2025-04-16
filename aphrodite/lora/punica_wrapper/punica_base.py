@@ -129,24 +129,22 @@ class PunicaWrapperBase(PunicaWrapperABC):
 
     def __init__(self, max_num_batched_tokens: int, max_batches: int,
                  device: Union[torch.device, str], **kwargs):
-        # Add 5 token overhead for LoRA operations
-        buffer_size = max_num_batched_tokens + 5
-        self._token_lora_indices = torch.empty(buffer_size,
-                                             dtype=torch.long,
-                                             device=device)
-        self._sampler_indices = torch.empty(buffer_size,
-                                          dtype=torch.long,
-                                          device=device)
-        self._sampler_indices_padded = torch.empty(buffer_size,
-                                                 dtype=torch.long,
-                                                 device=device)
-        self._embeddings_indices = torch.empty(2,
-                                             buffer_size,
-                                             dtype=torch.long,
-                                             device=device)
-        self._long_lora_indices = torch.empty(buffer_size,
+        self._token_lora_indices = torch.empty(max_num_batched_tokens,
+                                               dtype=torch.long,
+                                               device=device)
+        self._sampler_indices = torch.empty(max_num_batched_tokens,
                                             dtype=torch.long,
                                             device=device)
+        self._sampler_indices_padded = torch.empty(max_num_batched_tokens,
+                                                   dtype=torch.long,
+                                                   device=device)
+        self._embeddings_indices = torch.empty(2,
+                                               max_num_batched_tokens,
+                                               dtype=torch.long,
+                                               device=device)
+        self._long_lora_indices = torch.empty(max_num_batched_tokens,
+                                              dtype=torch.long,
+                                              device=device)
 
         # 5 is the number of indicies tensors.
         # base_indices, sampler_indices, sampler_indices_padded,
