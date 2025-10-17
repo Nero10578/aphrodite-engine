@@ -1376,12 +1376,7 @@ def in_the_same_node_as(pg: Union[ProcessGroup, StatelessProcessGroup],
         with contextlib.suppress(OSError):
             if rank == source_rank:
                 # create a shared memory segment
-                # fix to https://stackoverflow.com/q/62748654/9191338
-                # Python incorrectly tracks shared memory even if it is not
-                # created by the process. The following patch is a workaround.
-                with patch("multiprocessing.resource_tracker.register",
-                           lambda *args, **kwargs: None):
-                    shm = shared_memory.SharedMemory(create=True, size=128)
+                shm = shared_memory.SharedMemory(create=True, size=128)
                 shm.buf[:len(magic_message)] = magic_message
                 if isinstance(pg, ProcessGroup):
                     torch.distributed.broadcast_object_list(
