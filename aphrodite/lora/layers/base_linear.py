@@ -150,14 +150,18 @@ class BaseLinearLayerWithLoRA(BaseLayerWithLoRA):
         if apply_lora_bias:
             token_lora_indices = self.punica_wrapper.token_lora_indices
             if token_lora_indices is not None:
-                valid_mask = token_lora_indices != -1
-                valid_indices = token_lora_indices[valid_mask]
-
-                if valid_indices.numel() > 0:
-                    # self.lora_bias_stacked is tuple of (max_loras, 1, output_size)
-                    # For BaseLinearLayerWithLoRA, len(self.lora_bias_stacked) == 1
-                    biases = self.lora_bias_stacked[0][valid_indices, 0, :]
-                    output[valid_mask] += biases
+                # Avoid boolean indexing which causes dynamic shape issues with torch.compile
+                mask = (token_lora_indices != -1)
+                # Use 0 for invalid indices, result will be masked out
+                safe_indices = torch.where(mask, token_lora_indices, torch.tensor(0, device=token_lora_indices.device))
+                
+                # self.lora_bias_stacked is tuple of (max_loras, 1, output_size)
+                # For BaseLinearLayerWithLoRA, len(self.lora_bias_stacked) == 1
+                bias_tensor = self.lora_bias_stacked[0].squeeze(1) # (max_loras, output_size)
+                gathered_biases = bias_tensor[safe_indices] # (batch_size, output_size)
+                
+                # Apply mask and add
+                output.add_(gathered_biases * mask.unsqueeze(1).to(output.dtype))
 
         return output
 

@@ -69,12 +69,16 @@ class RowParallelLinearWithLoRA(BaseLinearLayerWithLoRA):
         if not apply_lora_bias_in_apply:
             token_lora_indices = self.punica_wrapper.token_lora_indices
             if token_lora_indices is not None:
-                valid_mask = token_lora_indices != -1
-                valid_indices = token_lora_indices[valid_mask]
-
-                if valid_indices.numel() > 0:
-                    biases = self.lora_bias_stacked[0][valid_indices, 0, :]
-                    output_[valid_mask] += biases
+                # Avoid boolean indexing which causes dynamic shape issues with torch.compile
+                mask = (token_lora_indices != -1)
+                # Use 0 for invalid indices, result will be masked out
+                safe_indices = torch.where(mask, token_lora_indices, torch.tensor(0, device=token_lora_indices.device))
+                
+                bias_tensor = self.lora_bias_stacked[0].squeeze(1) # (max_loras, output_size)
+                gathered_biases = bias_tensor[safe_indices] # (batch_size, output_size)
+                
+                # Apply mask and add
+                output_.add_(gathered_biases * mask.unsqueeze(1).to(output_.dtype))
 
         if not self.base_layer.skip_bias_add:
             output = output_ + self.base_layer.bias if self.base_layer.bias is not None else output_
@@ -175,13 +179,16 @@ class RowParallelLinearWithShardedLoRA(RowParallelLinearWithLoRA):
         if apply_lora_bias:
             token_lora_indices = self.punica_wrapper.token_lora_indices
             if token_lora_indices is not None:
-                valid_mask = token_lora_indices != -1
-                valid_indices = token_lora_indices[valid_mask]
-
-                if valid_indices.numel() > 0:
-                    biases = self.lora_bias_stacked[0][valid_indices, 0, :]
-                    # Add bias to the slice
-                    output[valid_mask, offset_start : offset_start + shard_size] += biases
+                # Avoid boolean indexing which causes dynamic shape issues with torch.compile
+                mask = (token_lora_indices != -1)
+                # Use 0 for invalid indices, result will be masked out
+                safe_indices = torch.where(mask, token_lora_indices, torch.tensor(0, device=token_lora_indices.device))
+                
+                bias_tensor = self.lora_bias_stacked[0].squeeze(1) # (max_loras, output_size)
+                gathered_biases = bias_tensor[safe_indices] # (batch_size, output_size)
+                
+                # Apply mask and add to the slice
+                output[:, offset_start : offset_start + shard_size].add_(gathered_biases * mask.unsqueeze(1).to(output.dtype))
 
         output = output.view(*out_orig_shape)
         return output

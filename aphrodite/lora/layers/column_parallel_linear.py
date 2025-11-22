@@ -58,21 +58,25 @@ def _mcp_apply(x, bias, layer: "ColumnParallelLinearWithLoRA"):
     # Apply LoRA bias
     token_lora_indices = layer.punica_wrapper.token_lora_indices
     if token_lora_indices is not None:
-        valid_mask = token_lora_indices != -1
-        valid_indices = token_lora_indices[valid_mask]
-
-        if valid_indices.numel() > 0:
-            offset = 0
-            # Flatten output to (total_tokens, output_dim) for indexing
-            output_flat = output.view(-1, output.shape[-1])
+        # Avoid boolean indexing which causes dynamic shape issues with torch.compile
+        mask = (token_lora_indices != -1)
+        # Use 0 for invalid indices, result will be masked out
+        safe_indices = torch.where(mask, token_lora_indices, torch.tensor(0, device=token_lora_indices.device))
+        
+        offset = 0
+        # Flatten output to (total_tokens, output_dim) for indexing
+        output_flat = output.view(-1, output.shape[-1])
+        
+        for i, slice_size in enumerate(layer.output_slices):
+            # layer.lora_bias_stacked[i] is (max_loras, 1, slice_size)
+            bias_tensor = layer.lora_bias_stacked[i].squeeze(1) # (max_loras, slice_size)
+            gathered_biases = bias_tensor[safe_indices] # (batch_size, slice_size)
             
-            for i, slice_size in enumerate(layer.output_slices):
-                # layer.lora_bias_stacked[i] is (max_loras, 1, slice_size)
-                biases = layer.lora_bias_stacked[i][valid_indices, 0, :]
-                output_flat[valid_mask, offset : offset + slice_size] += biases
-                offset += slice_size
-            
-            output = output_flat.view(*out_orig_shape)
+            # Apply mask and add
+            output_flat[:, offset : offset + slice_size].add_(gathered_biases * mask.unsqueeze(1).to(output_flat.dtype))
+            offset += slice_size
+        
+        output = output_flat.view(*out_orig_shape)
 
     output = output.view(*out_orig_shape)
     # now have column partitioned and packed output
