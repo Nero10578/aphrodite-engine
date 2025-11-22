@@ -109,11 +109,35 @@ class FusedMoEWithLoRA(BaseLayerWithLoRA):
 
         def fwd_decorator(layer, func):
             def wrapper(*args, **kwargs):
-                moe_state_dict["hidden_states"] = kwargs["hidden_states"]
-                moe_state_dict["topk_ids"] = kwargs["topk_ids"]
-                moe_state_dict["topk_weights"] = kwargs["topk_weights"]
-                moe_state_dict["expert_map"] = kwargs["expert_map"]
-                moe_state_dict["apply_router_weight_on_input"] = kwargs["apply_router_weight_on_input"]
+                if "hidden_states" in kwargs:
+                    moe_state_dict["hidden_states"] = kwargs["hidden_states"]
+                else:
+                    moe_state_dict["hidden_states"] = args[0]
+
+                if "topk_ids" in kwargs:
+                    moe_state_dict["topk_ids"] = kwargs["topk_ids"]
+                elif len(args) > 4:
+                    moe_state_dict["topk_ids"] = args[4]
+
+                if "topk_weights" in kwargs:
+                    moe_state_dict["topk_weights"] = kwargs["topk_weights"]
+                elif len(args) > 3:
+                    moe_state_dict["topk_weights"] = args[3]
+
+                if "expert_map" in kwargs:
+                    moe_state_dict["expert_map"] = kwargs["expert_map"]
+                elif len(args) > 8:
+                    moe_state_dict["expert_map"] = args[8]
+                else:
+                    moe_state_dict["expert_map"] = None
+
+                if "apply_router_weight_on_input" in kwargs:
+                    moe_state_dict["apply_router_weight_on_input"] = kwargs["apply_router_weight_on_input"]
+                elif len(args) > 9:
+                    moe_state_dict["apply_router_weight_on_input"] = args[9]
+                else:
+                    moe_state_dict["apply_router_weight_on_input"] = False
+
                 result = func(*args, **kwargs)
                 return result
 
