@@ -393,7 +393,7 @@ class FusedMoEWithLoRA(BaseLayerWithLoRA):
         lora_a: torch.Tensor,
         lora_b: torch.Tensor,
         embeddings_tensor: torch.Tensor | None,
-        bias: torch.Tensor | None = None,
+        lora_bias: torch.Tensor | None = None,
     ):
         """Overwrites lora tensors at index."""
         self.reset_lora(index)

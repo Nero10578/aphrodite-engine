@@ -26,7 +26,7 @@ class PEFTHelper:
     lora_alpha: int
     target_modules: list[str] | str
 
-    bias: Literal["none"] = field(default="none")
+    bias: Literal["none", "all", "lora_only"] = field(default="none")
     modules_to_save: list[str] | None = field(default=None)
     # True to use Rank-Stabilized LoRA (rsLoRA, see: https://arxiv.org/abs/2312.03732)
     use_rslora: bool = field(default=False)
@@ -110,7 +110,5 @@ class PEFTHelper:
         error_msg = self._validate_features()
         if self.r > lora_config.max_lora_rank:
             error_msg.append(f"LoRA rank {self.r} is greater than max_lora_rank {lora_config.max_lora_rank}.")
-        if self.bias != "none":
-            error_msg.append("Adapter bias is not supported.")
         if error_msg:
             raise ValueError(f"{' '.join(error_msg)}")

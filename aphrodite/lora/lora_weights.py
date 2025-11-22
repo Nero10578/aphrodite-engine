@@ -20,6 +20,7 @@ class LoRALayerWeights:
         lora_b: torch.Tensor,
         embeddings_tensor: torch.Tensor | None = None,
         scaling: float | None = None,
+        lora_bias: torch.Tensor | None = None,
     ) -> None:
         self.module_name = module_name
         self.rank = rank
@@ -27,6 +28,7 @@ class LoRALayerWeights:
         self.lora_a = lora_a
         self.lora_b = lora_b
         self.embeddings_tensor = embeddings_tensor
+        self.lora_bias = lora_bias
 
         if scaling is None:
             self.scaling = self.lora_alpha / self.rank
@@ -38,6 +40,8 @@ class LoRALayerWeights:
         if self.scaling == 1:
             return self
         self.lora_b *= self.scaling
+        if self.lora_bias is not None:
+            self.lora_bias *= self.scaling
         self.scaling = 1
         return self
 
@@ -73,6 +77,7 @@ class LoRALayerWeights:
             None,
             embeddings_tensor,
             peft_helper.aphrodite_lora_scaling_factor,
+            None,
         )
 
     @classmethod
@@ -89,6 +94,7 @@ class LoRALayerWeights:
         pin_memory = str(device) == "cpu" and is_pin_memory_available()
         lora_a = torch.zeros([rank, input_dim], dtype=dtype, device=device, pin_memory=pin_memory)
         lora_b = torch.zeros([output_dim, rank], dtype=dtype, device=device, pin_memory=pin_memory)
+        lora_bias = torch.zeros([output_dim], dtype=dtype, device=device, pin_memory=pin_memory)
 
         embeddings_tensor = (
             torch.rand(
@@ -108,6 +114,7 @@ class LoRALayerWeights:
             lora_a=lora_a,
             lora_b=lora_b,
             embeddings_tensor=embeddings_tensor,
+            lora_bias=lora_bias,
         )
 
 
@@ -122,6 +129,7 @@ class PackedLoRALayerWeights(LoRALayerWeights):
         lora_a: list[torch.Tensor | None],
         lora_b: list[torch.Tensor | None],
         scaling: list[float] | None = None,
+        lora_bias: list[torch.Tensor | None] | None = None,
     ) -> None:
         super().__init__(
             module_name=module_name,
@@ -131,6 +139,7 @@ class PackedLoRALayerWeights(LoRALayerWeights):
             lora_b=lora_b,
             scaling=scaling,  # type: ignore
             embeddings_tensor=None,
+            lora_bias=lora_bias,
         )
         self.lora_alphas = lora_alphas
         if scaling is None:
@@ -162,6 +171,7 @@ class PackedLoRALayerWeights(LoRALayerWeights):
                 1 if lora is not None else None  # type: ignore
                 for lora in loras
             ],
+            lora_bias=[lora.lora_bias if lora is not None else None for lora in loras],
         )
         return obj
 
@@ -171,6 +181,8 @@ class PackedLoRALayerWeights(LoRALayerWeights):
             if self.scaling[i] == 1 or self.lora_b[i] is None:  # type: ignore
                 continue
             self.lora_b[i] *= self.scaling[i]  # type: ignore
+            if self.lora_bias is not None and self.lora_bias[i] is not None:
+                self.lora_bias[i] *= self.scaling[i]  # type: ignore
             self.scaling[i] = 1  # type: ignore
         return self
 

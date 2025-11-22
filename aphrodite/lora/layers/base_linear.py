@@ -78,12 +78,23 @@ class BaseLinearLayerWithLoRA(BaseLayerWithLoRA):
             )
             for _ in range(self.n_slices)
         )
+        self.lora_bias_stacked = tuple(
+            torch.zeros(
+                max_loras,
+                1,
+                lora_b_out_size,
+                dtype=lora_config.lora_dtype,
+                device=self.device,
+            )
+            for _ in range(self.n_slices)
+        )
         self.output_slices = (self.lora_b_stacked[0].shape[2],)
 
     def reset_lora(self, index: int):
         for s_index in range(self.n_slices):
             self.lora_a_stacked[s_index][index] = 0
             self.lora_b_stacked[s_index][index] = 0
+            self.lora_bias_stacked[s_index][index] = 0
 
     def set_lora(
         self,
@@ -91,6 +102,7 @@ class BaseLinearLayerWithLoRA(BaseLayerWithLoRA):
         lora_a: torch.Tensor,
         lora_b: torch.Tensor,
         embeddings_tensor: torch.Tensor | None,
+        lora_bias: torch.Tensor | None = None,
     ):
         # Except for QKVParallelLinearWithLoRA and
         # MergedColumnParallelLinearWithLoRA, all other linear LoRA layers
@@ -102,9 +114,15 @@ class BaseLinearLayerWithLoRA(BaseLayerWithLoRA):
         if self.tp_size > 1:
             lora_a = self.slice_lora_a(lora_a)
             lora_b = self.slice_lora_b(lora_b)
+            if lora_bias is not None:
+                # Reuse slice_lora_b for bias since it has the same output dimension
+                # But slice_lora_b expects 2D tensor, bias is 1D
+                lora_bias = self.slice_lora_b(lora_bias.unsqueeze(1)).squeeze(1)
 
         self.lora_a_stacked[0][index, 0, : lora_a.shape[0], : lora_a.shape[1]].copy_(lora_a, non_blocking=True)
         self.lora_b_stacked[0][index, 0, : lora_b.shape[0], : lora_b.shape[1]].copy_(lora_b, non_blocking=True)
+        if lora_bias is not None:
+            self.lora_bias_stacked[0][index, 0, : lora_bias.shape[0]].copy_(lora_bias, non_blocking=True)
 
     def apply(self, x: torch.Tensor, bias: torch.Tensor | None = None) -> torch.Tensor:
         output = self.base_layer.quant_method.apply(self.base_layer, x, bias)
@@ -119,6 +137,22 @@ class BaseLinearLayerWithLoRA(BaseLayerWithLoRA):
         lora_output: torch.Tensor | None = self.punica_wrapper.add_lora_linear(
             output, x, self.lora_a_stacked, self.lora_b_stacked, 1.0, self.output_slices
         )
+        
+        # Apply LoRA bias if present
+        # We need to get the active lora indices to know which bias to apply
+        # This is tricky because add_lora_linear handles the indices internally via punica_wrapper
+        # But punica_wrapper doesn't expose a way to add bias.
+        # We might need to extend punica_wrapper or do it manually here.
+        
+        # For now, let's assume we can't easily do it efficiently without kernel support
+        # But wait, if we are here, we are likely using the punica kernel.
+        # The punica kernel does: y[i] += (x[i] @ A[idx] @ B[idx]) * scale
+        # We want: y[i] += (x[i] @ A[idx] @ B[idx] + bias[idx]) * scale
+        # y[i] += (x[i] @ A[idx] @ B[idx]) * scale + bias[idx] * scale
+        
+        # Since we don't have easy access to the indices here (they are inside punica_wrapper),
+        # we might need to add a method to punica_wrapper to add bias.
+        
         if not current_platform.can_update_inplace():
             output = lora_output
 

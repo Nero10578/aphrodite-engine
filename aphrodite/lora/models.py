@@ -136,6 +136,10 @@ class LoRAModel:
                 loras[module_name].lora_a = tensor.to(device=device, dtype=dtype)
                 if pin_memory:
                     loras[module_name].lora_a = loras[module_name].lora_a.pin_memory()
+            elif tensor_name.endswith("bias"):
+                loras[module_name].lora_bias = tensor.to(device=device, dtype=dtype)
+                if pin_memory:
+                    loras[module_name].lora_bias = loras[module_name].lora_bias.pin_memory()
             else:
                 loras[module_name].lora_b = tensor.to(device=device, dtype=dtype)
                 assert embedding_padding_modules is not None
@@ -411,8 +415,21 @@ class LoRAModelManager:
                     down_proj_a = down_proj_lora.lora_a.chunk(num_experts, dim=0)
                     down_proj_b = down_proj_lora.lora_b.chunk(num_experts, dim=-1)
 
+                    if gate_up_proj_lora.lora_bias is not None:
+                        gate_proj_bias = gate_up_proj_lora.lora_bias[::2, ...].chunk(num_experts, dim=-1)
+                        up_proj_bias = gate_up_proj_lora.lora_bias[1::2, ...].chunk(num_experts, dim=-1)
+                    else:
+                        gate_proj_bias = [None] * num_experts
+                        up_proj_bias = [None] * num_experts
+
+                    if down_proj_lora.lora_bias is not None:
+                        down_proj_bias = down_proj_lora.lora_bias.chunk(num_experts, dim=-1)
+                    else:
+                        down_proj_bias = [None] * num_experts
+
                     lora_a = []
                     lora_b = []
+                    lora_bias = []
                     for i in range(num_experts):
                         lora_a.append(gate_proj_a[i])
                         lora_a.append(down_proj_a[i])
@@ -422,14 +439,20 @@ class LoRAModelManager:
                         lora_b.append(down_proj_b[i])
                         lora_b.append(up_proj_b[i])
 
+                        lora_bias.append(gate_proj_bias[i])
+                        lora_bias.append(down_proj_bias[i])
+                        lora_bias.append(up_proj_bias[i])
+
                     module_lora.lora_a = lora_a
                     module_lora.lora_b = lora_b
+                    module_lora.lora_bias = lora_bias
 
                 module.set_lora(
                     index,
                     module_lora.lora_a,
                     module_lora.lora_b,
                     module_lora.embeddings_tensor,
+                    module_lora.lora_bias,
                 )
             else:
                 module.reset_lora(index)
