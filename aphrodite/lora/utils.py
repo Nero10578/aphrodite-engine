@@ -156,6 +156,10 @@ def parse_fine_tuned_lora_name(name: str, weights_mapper: Optional["WeightsMappe
         new_name = ".".join(parts[start_index:-1])
         return new_name, parts[-1] == "lora_embedding_A"
 
+    if parts[-1] == "bias" and (parts[-2] == "lora_A" or parts[-2] == "lora_B"):
+        new_name = ".".join(parts[start_index:-2])
+        return new_name, parts[-2] == "lora_A"
+
     raise ValueError(f"{name} is unsupported LoRA weight")
 
 

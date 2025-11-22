@@ -133,10 +133,16 @@ class LoRAModel:
                 loras[module_name] = LoRALayerWeights.from_config(module_name, peft_helper, lora_embeddings_tensor)
 
             if is_lora_a:
+                if tensor_name.endswith("bias"):
+                    continue
                 loras[module_name].lora_a = tensor.to(device=device, dtype=dtype)
                 if pin_memory:
                     loras[module_name].lora_a = loras[module_name].lora_a.pin_memory()
             else:
+                if tensor_name.endswith("bias"):
+                    # We don't support bias in LoRA yet, so we just ignore it.
+                    # TODO(yard1): Support bias in LoRA
+                    continue
                 loras[module_name].lora_b = tensor.to(device=device, dtype=dtype)
                 assert embedding_padding_modules is not None
                 if (
