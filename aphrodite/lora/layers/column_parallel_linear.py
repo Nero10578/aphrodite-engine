@@ -55,6 +55,25 @@ def _mcp_apply(x, bias, layer: "ColumnParallelLinearWithLoRA"):
     if not current_platform.can_update_inplace():
         output = lora_output
 
+    # Apply LoRA bias
+    token_lora_indices = layer.punica_wrapper.token_lora_indices
+    if token_lora_indices is not None:
+        valid_mask = token_lora_indices != -1
+        valid_indices = token_lora_indices[valid_mask]
+
+        if valid_indices.numel() > 0:
+            offset = 0
+            # Flatten output to (total_tokens, output_dim) for indexing
+            output_flat = output.view(-1, output.shape[-1])
+            
+            for i, slice_size in enumerate(layer.output_slices):
+                # layer.lora_bias_stacked[i] is (max_loras, 1, slice_size)
+                biases = layer.lora_bias_stacked[i][valid_indices, 0, :]
+                output_flat[valid_mask, offset : offset + slice_size] += biases
+                offset += slice_size
+            
+            output = output_flat.view(*out_orig_shape)
+
     output = output.view(*out_orig_shape)
     # now have column partitioned and packed output
     return output
@@ -203,6 +222,16 @@ class MergedColumnParallelLinearWithLoRA(ColumnParallelLinearWithLoRA):
             )
             for output_size in self.output_slices
         )
+        self.lora_bias_stacked = tuple(
+            torch.zeros(
+                max_loras,
+                1,
+                output_size,
+                dtype=lora_config.lora_dtype,
+                device=self.device,
+            )
+            for output_size in self.output_slices
+        )
 
     def slice_lora_a(self, lora_a: list[torch.Tensor | None]) -> list[torch.Tensor | None]:
         return lora_a
@@ -214,18 +243,28 @@ class MergedColumnParallelLinearWithLoRA(ColumnParallelLinearWithLoRA):
                 sliced_lora_b[i] = lora_b_i[shard_size * shard_id : shard_size * (shard_id + 1), :]
         return sliced_lora_b
 
+    def slice_lora_bias(self, lora_bias: list[torch.Tensor | None]) -> list[torch.Tensor | None]:
+        sliced_lora_bias = [None] * self.n_slices
+        for i, (shard_id, shard_size) in enumerate(zip(self.output_ids, self.output_slices)):
+            if (lora_bias_i := lora_bias[i]) is not None:
+                sliced_lora_bias[i] = lora_bias_i[shard_size * shard_id : shard_size * (shard_id + 1)]
+        return sliced_lora_bias
+
     def set_lora(
         self,
         index: int,
         lora_a: torch.Tensor,
         lora_b: torch.Tensor,
         embeddings_tensor: torch.Tensor | None,
+        lora_bias: torch.Tensor | None = None,
     ):
         self.reset_lora(index)
 
         if self.tp_size > 1:
             lora_a = self.slice_lora_a(lora_a)
             lora_b = self.slice_lora_b(lora_b)
+            if lora_bias is not None:
+                lora_bias = self.slice_lora_bias(lora_bias)
 
         for i in range(self.n_slices):
             if (lora_a_i := lora_a[i]) is not None:
@@ -235,6 +274,10 @@ class MergedColumnParallelLinearWithLoRA(ColumnParallelLinearWithLoRA):
             if (lora_b_i := lora_b[i]) is not None:
                 self.lora_b_stacked[i][index, 0, : lora_b_i.shape[0], : lora_b_i.shape[1]].copy_(
                     lora_b_i, non_blocking=True
+                )
+            if lora_bias is not None and (lora_bias_i := lora_bias[i]) is not None:
+                self.lora_bias_stacked[i][index, 0, : lora_bias_i.shape[0]].copy_(
+                    lora_bias_i, non_blocking=True
                 )
 
     @classmethod

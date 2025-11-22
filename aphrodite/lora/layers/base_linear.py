@@ -124,7 +124,12 @@ class BaseLinearLayerWithLoRA(BaseLayerWithLoRA):
         if lora_bias is not None:
             self.lora_bias_stacked[0][index, 0, : lora_bias.shape[0]].copy_(lora_bias, non_blocking=True)
 
-    def apply(self, x: torch.Tensor, bias: torch.Tensor | None = None) -> torch.Tensor:
+    def apply(
+        self,
+        x: torch.Tensor,
+        bias: torch.Tensor | None = None,
+        apply_lora_bias: bool = True,
+    ) -> torch.Tensor:
         output = self.base_layer.quant_method.apply(self.base_layer, x, bias)
 
         # In transformers backend, x and output have extra batch dimension like
@@ -137,24 +142,22 @@ class BaseLinearLayerWithLoRA(BaseLayerWithLoRA):
         lora_output: torch.Tensor | None = self.punica_wrapper.add_lora_linear(
             output, x, self.lora_a_stacked, self.lora_b_stacked, 1.0, self.output_slices
         )
-        
-        # Apply LoRA bias if present
-        # We need to get the active lora indices to know which bias to apply
-        # This is tricky because add_lora_linear handles the indices internally via punica_wrapper
-        # But punica_wrapper doesn't expose a way to add bias.
-        # We might need to extend punica_wrapper or do it manually here.
-        
-        # For now, let's assume we can't easily do it efficiently without kernel support
-        # But wait, if we are here, we are likely using the punica kernel.
-        # The punica kernel does: y[i] += (x[i] @ A[idx] @ B[idx]) * scale
-        # We want: y[i] += (x[i] @ A[idx] @ B[idx] + bias[idx]) * scale
-        # y[i] += (x[i] @ A[idx] @ B[idx]) * scale + bias[idx] * scale
-        
-        # Since we don't have easy access to the indices here (they are inside punica_wrapper),
-        # we might need to add a method to punica_wrapper to add bias.
-        
+
         if not current_platform.can_update_inplace():
             output = lora_output
+
+        # Apply LoRA bias
+        if apply_lora_bias:
+            token_lora_indices = self.punica_wrapper.token_lora_indices
+            if token_lora_indices is not None:
+                valid_mask = token_lora_indices != -1
+                valid_indices = token_lora_indices[valid_mask]
+
+                if valid_indices.numel() > 0:
+                    # self.lora_bias_stacked is tuple of (max_loras, 1, output_size)
+                    # For BaseLinearLayerWithLoRA, len(self.lora_bias_stacked) == 1
+                    biases = self.lora_bias_stacked[0][valid_indices, 0, :]
+                    output[valid_mask] += biases
 
         return output
 

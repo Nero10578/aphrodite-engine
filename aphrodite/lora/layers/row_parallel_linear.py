@@ -55,11 +55,26 @@ class RowParallelLinearWithLoRA(BaseLinearLayerWithLoRA):
             input_parallel = splitted_input[self.tp_rank].contiguous()
 
         # Matrix multiply.
-        output_parallel = self.apply(input_parallel)
+        # For fully sharded LoRAs (S-LoRA), bias is sharded and added in apply (to the slice).
+        # For normal LoRA, bias is full and added after all-reduce.
+        apply_lora_bias_in_apply = getattr(self.lora_config, "fully_sharded_loras", False)
+        output_parallel = self.apply(input_parallel, apply_lora_bias=apply_lora_bias_in_apply)
+        
         if self.base_layer.reduce_results and self.tp_size > 1:
             output_ = tensor_model_parallel_all_reduce(output_parallel)
         else:
             output_ = output_parallel
+
+        # Apply LoRA bias after all-reduce if not applied in apply
+        if not apply_lora_bias_in_apply:
+            token_lora_indices = self.punica_wrapper.token_lora_indices
+            if token_lora_indices is not None:
+                valid_mask = token_lora_indices != -1
+                valid_indices = token_lora_indices[valid_mask]
+
+                if valid_indices.numel() > 0:
+                    biases = self.lora_bias_stacked[0][valid_indices, 0, :]
+                    output_[valid_mask] += biases
 
         if not self.base_layer.skip_bias_add:
             output = output_ + self.base_layer.bias if self.base_layer.bias is not None else output_
@@ -107,7 +122,19 @@ class RowParallelLinearWithShardedLoRA(RowParallelLinearWithLoRA):
         lora_b = lora_b[start_idx:end_idx, :]
         return lora_b
 
-    def apply(self, x: torch.Tensor, bias: torch.Tensor | None = None) -> torch.Tensor:
+    def slice_lora_bias(self, lora_bias: torch.Tensor) -> torch.Tensor:
+        shard_size = self.lora_b_stacked[0].shape[2]
+        start_idx = self.tp_rank * shard_size
+        end_idx = (self.tp_rank + 1) * shard_size
+        lora_bias = lora_bias[start_idx:end_idx]
+        return lora_bias
+
+    def apply(
+        self,
+        x: torch.Tensor,
+        bias: torch.Tensor | None = None,
+        apply_lora_bias: bool = True,
+    ) -> torch.Tensor:
         output = self.base_layer.quant_method.apply(self.base_layer, x)
 
         x = x.view(-1, x.shape[-1])
@@ -144,6 +171,17 @@ class RowParallelLinearWithShardedLoRA(RowParallelLinearWithLoRA):
 
         if not current_platform.can_update_inplace():
             output = lora_output
+
+        if apply_lora_bias:
+            token_lora_indices = self.punica_wrapper.token_lora_indices
+            if token_lora_indices is not None:
+                valid_mask = token_lora_indices != -1
+                valid_indices = token_lora_indices[valid_mask]
+
+                if valid_indices.numel() > 0:
+                    biases = self.lora_bias_stacked[0][valid_indices, 0, :]
+                    # Add bias to the slice
+                    output[valid_mask, offset_start : offset_start + shard_size] += biases
 
         output = output.view(*out_orig_shape)
         return output
