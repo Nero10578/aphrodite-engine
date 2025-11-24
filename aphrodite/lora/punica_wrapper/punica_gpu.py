@@ -51,6 +51,10 @@ class PunicaWrapperGPU(PunicaWrapperBase):
         
         # This will hold the dispatched token_lora_indices when EP is active.
         self._dispatched_token_lora_indices: torch.Tensor | None = None
+        
+        # Side-channel for EP communication
+        self._ep_dispatch_indices: torch.Tensor | None = None
+        self._ep_received_indices: torch.Tensor | None = None
 
     def update_metadata(
         self,
@@ -77,6 +81,22 @@ class PunicaWrapperGPU(PunicaWrapperBase):
     def get_token_lora_indices(self) -> torch.Tensor | None:
         """Get the current token_lora_indices, preferring dispatched ones for EP."""
         return self._dispatched_token_lora_indices if self._dispatched_token_lora_indices is not None else self.token_lora_indices
+        
+    def set_ep_dispatch_indices(self, indices: torch.Tensor | None):
+        """Set the token_lora_indices to be dispatched via EP."""
+        self._ep_dispatch_indices = indices
+        
+    def get_ep_dispatch_indices(self) -> torch.Tensor | None:
+        """Get the token_lora_indices to be dispatched via EP."""
+        return self._ep_dispatch_indices
+        
+    def set_ep_received_indices(self, indices: torch.Tensor | None):
+        """Set the token_lora_indices received from EP."""
+        self._ep_received_indices = indices
+        
+    def get_ep_received_indices(self) -> torch.Tensor | None:
+        """Get the token_lora_indices received from EP."""
+        return self._ep_received_indices
 
     def add_shrink(
         self,

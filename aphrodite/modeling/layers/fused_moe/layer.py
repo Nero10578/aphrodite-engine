@@ -2301,20 +2301,26 @@ class FusedMoE(CustomOp):
         with sp_ctx:
             if do_naive_dispatch_combine:
                 # Get token_lora_indices from the punica_wrapper if it exists
-                token_lora_indices = None
                 if hasattr(self, "punica_wrapper") and self.punica_wrapper is not None:
                     # The punica_wrapper holds the mapping from token to LoRA ID
                     # We need to send this information along with the tokens during EP dispatch
                     token_lora_indices = self.punica_wrapper.get_token_lora_indices()
+                    # Set the indices on the punica_wrapper so the all2all manager can access them
+                    self.punica_wrapper.set_ep_dispatch_indices(token_lora_indices)
 
-                hidden_states, router_logits, token_lora_indices = get_ep_group().dispatch(
-                    hidden_states, router_logits, self.is_sequence_parallel, token_lora_indices
+                    # Pass the punica_wrapper to the all2all manager for side-channel communication
+                    all2all_manager = get_ep_group().device_communicator.all2all_manager
+                    if hasattr(all2all_manager, 'set_punica_wrapper'):
+                        all2all_manager.set_punica_wrapper(self.punica_wrapper)
+
+                hidden_states, router_logits = get_ep_group().dispatch(
+                    hidden_states, router_logits, self.is_sequence_parallel
                 )
 
-                # After dispatch, update the punica_wrapper with the received indices
-                if token_lora_indices is not None:
-                    if hasattr(self, "punica_wrapper") and self.punica_wrapper is not None:
-                        self.punica_wrapper.set_dispatched_token_lora_indices(token_lora_indices)
+                # After dispatch, get the received indices from the punica_wrapper
+                if hasattr(self, "punica_wrapper") and self.punica_wrapper is not None:
+                    received_indices = self.punica_wrapper.get_ep_received_indices()
+                    self.punica_wrapper.set_dispatched_token_lora_indices(received_indices)
 
             # Matrix multiply.
             final_hidden_states = self.quant_method.apply(

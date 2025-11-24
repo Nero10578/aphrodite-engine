@@ -30,6 +30,10 @@ class NaiveAll2AllManager(All2AllManagerBase):
 
     def __init__(self, cpu_group):
         super().__init__(cpu_group)
+        self.punica_wrapper = None
+
+    def set_punica_wrapper(self, punica_wrapper):
+        self.punica_wrapper = punica_wrapper
 
     def naive_multicast(
         self,
@@ -53,13 +57,19 @@ class NaiveAll2AllManager(All2AllManagerBase):
 
         return buffer
 
+    def __init__(self, cpu_group):
+        super().__init__(cpu_group)
+        self.punica_wrapper = None
+
+    def set_punica_wrapper(self, punica_wrapper):
+        self.punica_wrapper = punica_wrapper
+
     def dispatch(
         self,
         hidden_states: torch.Tensor,
         router_logits: torch.Tensor,
         is_sequence_parallel: bool = False,
-        token_lora_indices: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         sp_size = self.tp_group.world_size if is_sequence_parallel else 1
         dp_metadata = get_forward_context().dp_metadata
         assert dp_metadata is not None
@@ -67,11 +77,17 @@ class NaiveAll2AllManager(All2AllManagerBase):
 
         hidden_states = self.naive_multicast(hidden_states, cu_tokens_across_sp_cpu, is_sequence_parallel)
         router_logits = self.naive_multicast(router_logits, cu_tokens_across_sp_cpu, is_sequence_parallel)
-        if token_lora_indices is not None:
-            token_lora_indices = self.naive_multicast(
-                token_lora_indices, cu_tokens_across_sp_cpu, is_sequence_parallel
-            )
-        return hidden_states, router_logits, token_lora_indices
+        
+        # Handle token_lora_indices via side-channel
+        if self.punica_wrapper is not None:
+            token_lora_indices = self.punica_wrapper.get_ep_dispatch_indices()
+            if token_lora_indices is not None:
+                token_lora_indices = self.naive_multicast(
+                    token_lora_indices, cu_tokens_across_sp_cpu, is_sequence_parallel
+                )
+                self.punica_wrapper.set_ep_received_indices(token_lora_indices)
+        
+        return hidden_states, router_logits
 
     def combine(self, hidden_states: torch.Tensor, is_sequence_parallel: bool = False) -> torch.Tensor:
         ep_rank = self.rank if is_sequence_parallel else self.dp_rank
@@ -100,14 +116,24 @@ class AgRsAll2AllManager(All2AllManagerBase):
 
     def __init__(self, cpu_group):
         super().__init__(cpu_group)
+        self.punica_wrapper = None
+
+    def set_punica_wrapper(self, punica_wrapper):
+        self.punica_wrapper = punica_wrapper
+
+    def __init__(self, cpu_group):
+        super().__init__(cpu_group)
+        self.punica_wrapper = None
+
+    def set_punica_wrapper(self, punica_wrapper):
+        self.punica_wrapper = punica_wrapper
 
     def dispatch(
         self,
         hidden_states: torch.Tensor,
         router_logits: torch.Tensor,
         is_sequence_parallel: bool = False,
-        token_lora_indices: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Gather hidden_states and router_logits from all dp ranks.
         """
@@ -120,8 +146,12 @@ class AgRsAll2AllManager(All2AllManagerBase):
         assert sizes[dist_group.rank_in_group] == hidden_states.shape[0]
 
         tensors = [hidden_states, router_logits]
-        if token_lora_indices is not None:
-            tensors.append(token_lora_indices)
+        
+        # Handle token_lora_indices via side-channel
+        if self.punica_wrapper is not None:
+            token_lora_indices = self.punica_wrapper.get_ep_dispatch_indices()
+            if token_lora_indices is not None:
+                tensors.append(token_lora_indices)
 
         tensors = dist_group.all_gatherv(
             tensors,
@@ -129,9 +159,11 @@ class AgRsAll2AllManager(All2AllManagerBase):
             sizes=sizes,
         )
 
-        if token_lora_indices is not None:
-            return tensors[0], tensors[1], tensors[2]
-        return tensors[0], tensors[1], None
+        # Handle received token_lora_indices via side-channel
+        if self.punica_wrapper is not None and len(tensors) > 2:
+            self.punica_wrapper.set_ep_received_indices(tensors[2])
+
+        return tensors[0], tensors[1]
 
     def combine(self, hidden_states: torch.Tensor, is_sequence_parallel: bool = False) -> torch.Tensor:
         """
@@ -156,6 +188,11 @@ class PPLXAll2AllManager(All2AllManagerBase):
     """
 
     def __init__(self, cpu_group):
+        super().__init__(cpu_group)
+        self.punica_wrapper = None
+
+    def set_punica_wrapper(self, punica_wrapper):
+        self.punica_wrapper = punica_wrapper
         assert has_pplx(), (
             "pplx_kernels not found. Please follow https://github.com/aphrodite-project/aphrodite/blob/main/tools/ep_kernels/README.md"
             " to install pplx_kernels."
@@ -200,8 +237,7 @@ class PPLXAll2AllManager(All2AllManagerBase):
         hidden_states: torch.Tensor,
         router_logits: torch.Tensor,
         is_sequence_parallel: bool = False,
-        token_lora_indices: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         raise NotImplementedError
 
     def combine(self, hidden_states: torch.Tensor, is_sequence_parallel: bool = False) -> torch.Tensor:
@@ -225,6 +261,11 @@ class DeepEPAll2AllManagerBase(All2AllManagerBase):
     """
 
     def __init__(self, cpu_group):
+        super().__init__(cpu_group)
+        self.punica_wrapper = None
+
+    def set_punica_wrapper(self, punica_wrapper):
+        self.punica_wrapper = punica_wrapper
         assert has_deep_ep(), (
             "DeepEP kernels not found. Please follow https://github.com/aphrodite-project/aphrodite/blob/main/tools/ep_kernels/README.md"
             " to install DeepEP kernels."
@@ -244,8 +285,7 @@ class DeepEPAll2AllManagerBase(All2AllManagerBase):
         hidden_states: torch.Tensor,
         router_logits: torch.Tensor,
         is_sequence_parallel: bool = False,
-        token_lora_indices: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         raise NotImplementedError
 
     def combine(self, hidden_states: torch.Tensor, is_sequence_parallel: bool = False) -> torch.Tensor:
@@ -261,6 +301,11 @@ class DeepEPHTAll2AllManager(DeepEPAll2AllManagerBase):
     """
 
     def __init__(self, cpu_group):
+        super().__init__(cpu_group)
+        self.punica_wrapper = None
+
+    def set_punica_wrapper(self, punica_wrapper):
+        self.punica_wrapper = punica_wrapper
         super().__init__(cpu_group)
 
     def _make_all2all_kwargs(self) -> dict[Any, Any]:
@@ -384,6 +429,11 @@ class FlashInferAllToAllManager(All2AllManagerBase):
     world_size: int
 
     def __init__(self, cpu_group):
+        super().__init__(cpu_group)
+        self.punica_wrapper = None
+
+    def set_punica_wrapper(self, punica_wrapper):
+        self.punica_wrapper = punica_wrapper
         assert has_flashinfer_all2all(), "flashinfer all2all module not found. Please install/check flashinfer"  # noqa
         super().__init__(cpu_group)
         logger.debug(

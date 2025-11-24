@@ -289,13 +289,12 @@ class CudaCommunicator(DeviceCommunicatorBase):
         hidden_states: torch.Tensor,
         router_logits: torch.Tensor,
         is_sequence_parallel: bool = False,
-        token_lora_indices: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         assert self.all2all_manager is not None
-        hidden_states, router_logits, token_lora_indices = self.all2all_manager.dispatch(
-            hidden_states, router_logits, is_sequence_parallel, token_lora_indices
+        hidden_states, router_logits = self.all2all_manager.dispatch(
+            hidden_states, router_logits, is_sequence_parallel
         )
-        return hidden_states, router_logits, token_lora_indices
+        return hidden_states, router_logits
 
     def combine(self, hidden_states: torch.Tensor, is_sequence_parallel: bool = False) -> torch.Tensor:
         assert self.all2all_manager is not None
