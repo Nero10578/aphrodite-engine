@@ -407,17 +407,27 @@ class FusedMoEWithLoRA(BaseLayerWithLoRA):
         """Overwrites lora tensors at index."""
         self.reset_lora(index)
         self.adapter_enabled[index] = 1
-        for eid in range(len(lora_a) // 3):
-            w1_lora_a = lora_a[eid * 3]
-            w2_lora_a = lora_a[eid * 3 + 1]
-            w3_lora_a = lora_a[eid * 3 + 2]
-            w1_lora_b = lora_b[eid * 3]
-            w2_lora_b = lora_b[eid * 3 + 1]
-            w3_lora_b = lora_b[eid * 3 + 2]
+        for global_eid in range(len(lora_a) // 3):
+            w1_lora_a = lora_a[global_eid * 3]
+            w2_lora_a = lora_a[global_eid * 3 + 1]
+            w3_lora_a = lora_a[global_eid * 3 + 2]
+            w1_lora_b = lora_b[global_eid * 3]
+            w2_lora_b = lora_b[global_eid * 3 + 1]
+            w3_lora_b = lora_b[global_eid * 3 + 2]
 
             # Handle the case of adding LoRA to only a subset of experts
             if w1_lora_a is None or w2_lora_a is None or w3_lora_a is None:
                 continue
+
+            # Map global expert ID to local expert ID for EP
+            if self.base_layer.expert_map is not None:
+                local_eid = self.base_layer.expert_map[global_eid].item()
+                if local_eid == -1:
+                    # This expert is not on this rank, skip it.
+                    continue
+            else:
+                # No EP, global and local expert IDs are the same.
+                local_eid = global_eid
 
             if self.tp_size > 1:
                 shard_size = self.base_layer.intermediate_size_per_partition
@@ -428,25 +438,25 @@ class FusedMoEWithLoRA(BaseLayerWithLoRA):
                 w3_lora_b = w3_lora_b[start_idx:end_idx, :]
                 w2_lora_a = w2_lora_a[:, start_idx:end_idx]
 
-            self.w1_lora_a_stacked[index, eid, : w1_lora_a.shape[0], : w1_lora_a.shape[1]].copy_(
+            self.w1_lora_a_stacked[index, local_eid, : w1_lora_a.shape[0], : w1_lora_a.shape[1]].copy_(
                 w1_lora_a, non_blocking=True
             )
 
-            self.w3_lora_a_stacked[index, eid, : w3_lora_a.shape[0], : w3_lora_a.shape[1]].copy_(
+            self.w3_lora_a_stacked[index, local_eid, : w3_lora_a.shape[0], : w3_lora_a.shape[1]].copy_(
                 w3_lora_a, non_blocking=True
             )
 
-            self.w2_lora_b_stacked[index, eid, : w2_lora_b.shape[0], : w2_lora_b.shape[1]].copy_(
+            self.w2_lora_b_stacked[index, local_eid, : w2_lora_b.shape[0], : w2_lora_b.shape[1]].copy_(
                 w2_lora_b, non_blocking=True
             )
 
-            self.w1_lora_b_stacked[index, eid, : w1_lora_b.shape[0], : w1_lora_b.shape[1]].copy_(
+            self.w1_lora_b_stacked[index, local_eid, : w1_lora_b.shape[0], : w1_lora_b.shape[1]].copy_(
                 w1_lora_b, non_blocking=True
             )
-            self.w3_lora_b_stacked[index, eid, : w3_lora_b.shape[0], : w3_lora_b.shape[1]].copy_(
+            self.w3_lora_b_stacked[index, local_eid, : w3_lora_b.shape[0], : w3_lora_b.shape[1]].copy_(
                 w3_lora_b, non_blocking=True
             )
-            self.w2_lora_a_stacked[index, eid, : w2_lora_a.shape[0], : w2_lora_a.shape[1]].copy_(
+            self.w2_lora_a_stacked[index, local_eid, : w2_lora_a.shape[0], : w2_lora_a.shape[1]].copy_(
                 w2_lora_a, non_blocking=True
             )
 
