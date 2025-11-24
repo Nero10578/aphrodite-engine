@@ -35,10 +35,7 @@ class FusedMoEWithLoRA(BaseLayerWithLoRA):
         self.tp_size = get_tensor_model_parallel_world_size()
         self.tp_rank = get_tensor_model_parallel_rank()
         self.device = base_layer.w2_weight.device
-        # The punica_wrapper is attached to the base_layer after LoRA injection
         self._inject_lora_into_fused_moe()
-        # Expose the punica_wrapper for easier access by the base_layer
-        self.base_layer.punica_wrapper = self.punica_wrapper
 
     def _normalize_keys(self, config: dict[str, int | None]) -> dict[str, int | None]:
         normalized_config = {}
@@ -52,6 +49,14 @@ class FusedMoEWithLoRA(BaseLayerWithLoRA):
                 normalized_key = key
             normalized_config[normalized_key] = value
         return normalized_config
+
+    def set_mapping(
+        self,
+        punica_wrapper,
+    ):
+        super().set_mapping(punica_wrapper)
+        # Expose the punica_wrapper for easier access by the base_layer
+        self.base_layer.punica_wrapper = self.punica_wrapper
 
     def _get_lora_moe_configs(
         self,
