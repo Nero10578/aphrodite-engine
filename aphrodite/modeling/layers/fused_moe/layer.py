@@ -293,7 +293,6 @@ class FusedMoEMethodBase(QuantizeMethodBase):
         expert_load_view: torch.Tensor | None = None,
         logical_to_physical_map: torch.Tensor | None = None,
         logical_replica_count: torch.Tensor | None = None,
-        token_lora_indices: torch.Tensor | None = None,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         raise NotImplementedError
 
@@ -546,7 +545,6 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, CustomOp):
             expert_load_view=expert_load_view,
             logical_to_physical_map=logical_to_physical_map,
             logical_replica_count=logical_replica_count,
-            token_lora_indices=token_lora_indices,
         )
 
     def get_fused_moe_quant_config(self, layer: torch.nn.Module) -> FusedMoEQuantConfig | None:
@@ -580,15 +578,9 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, CustomOp):
         expert_load_view: torch.Tensor | None = None,
         logical_to_physical_map: torch.Tensor | None = None,
         logical_replica_count: torch.Tensor | None = None,
-        token_lora_indices: torch.Tensor | None = None,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         zero_expert_num = getattr(layer, "zero_expert_num", 0)
         zero_expert_type = getattr(layer, "zero_expert_type", None)
-
-        # If EP is active and token_lora_indices are provided, update the punica_wrapper
-        if layer.use_ep and token_lora_indices is not None:
-            if hasattr(layer, "punica_wrapper") and layer.punica_wrapper is not None:
-                layer.punica_wrapper.set_dispatched_token_lora_indices(token_lora_indices)
 
         topk_weights, topk_ids, zero_expert_result = FusedMoE.select_experts(
             hidden_states=x,
@@ -2319,6 +2311,11 @@ class FusedMoE(CustomOp):
                     hidden_states, router_logits, self.is_sequence_parallel, token_lora_indices
                 )
 
+                # After dispatch, update the punica_wrapper with the received indices
+                if token_lora_indices is not None:
+                    if hasattr(self, "punica_wrapper") and self.punica_wrapper is not None:
+                        self.punica_wrapper.set_dispatched_token_lora_indices(token_lora_indices)
+
             # Matrix multiply.
             final_hidden_states = self.quant_method.apply(
                 layer=self,
@@ -2341,7 +2338,6 @@ class FusedMoE(CustomOp):
                 expert_load_view=self.expert_load_view,
                 logical_to_physical_map=self.logical_to_physical_map,
                 logical_replica_count=self.logical_replica_count,
-                token_lora_indices=token_lora_indices, # Pass the dispatched LoRA indices
             )
 
             if has_separate_shared_experts:
