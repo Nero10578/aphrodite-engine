@@ -58,7 +58,8 @@ class NaiveAll2AllManager(All2AllManagerBase):
         hidden_states: torch.Tensor,
         router_logits: torch.Tensor,
         is_sequence_parallel: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        token_lora_indices: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         sp_size = self.tp_group.world_size if is_sequence_parallel else 1
         dp_metadata = get_forward_context().dp_metadata
         assert dp_metadata is not None
@@ -66,7 +67,11 @@ class NaiveAll2AllManager(All2AllManagerBase):
 
         hidden_states = self.naive_multicast(hidden_states, cu_tokens_across_sp_cpu, is_sequence_parallel)
         router_logits = self.naive_multicast(router_logits, cu_tokens_across_sp_cpu, is_sequence_parallel)
-        return hidden_states, router_logits
+        if token_lora_indices is not None:
+            token_lora_indices = self.naive_multicast(
+                token_lora_indices, cu_tokens_across_sp_cpu, is_sequence_parallel
+            )
+        return hidden_states, router_logits, token_lora_indices
 
     def combine(self, hidden_states: torch.Tensor, is_sequence_parallel: bool = False) -> torch.Tensor:
         ep_rank = self.rank if is_sequence_parallel else self.dp_rank
@@ -101,7 +106,8 @@ class AgRsAll2AllManager(All2AllManagerBase):
         hidden_states: torch.Tensor,
         router_logits: torch.Tensor,
         is_sequence_parallel: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        token_lora_indices: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         """
         Gather hidden_states and router_logits from all dp ranks.
         """
@@ -112,12 +118,20 @@ class AgRsAll2AllManager(All2AllManagerBase):
 
         dist_group = get_ep_group() if is_sequence_parallel else get_dp_group()
         assert sizes[dist_group.rank_in_group] == hidden_states.shape[0]
-        hidden_states, router_logits = dist_group.all_gatherv(
-            [hidden_states, router_logits],
+
+        tensors = [hidden_states, router_logits]
+        if token_lora_indices is not None:
+            tensors.append(token_lora_indices)
+
+        tensors = dist_group.all_gatherv(
+            tensors,
             dim=0,
             sizes=sizes,
         )
-        return hidden_states, router_logits
+
+        if token_lora_indices is not None:
+            return tensors[0], tensors[1], tensors[2]
+        return tensors[0], tensors[1], None
 
     def combine(self, hidden_states: torch.Tensor, is_sequence_parallel: bool = False) -> torch.Tensor:
         """
@@ -186,7 +200,8 @@ class PPLXAll2AllManager(All2AllManagerBase):
         hidden_states: torch.Tensor,
         router_logits: torch.Tensor,
         is_sequence_parallel: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        token_lora_indices: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         raise NotImplementedError
 
     def combine(self, hidden_states: torch.Tensor, is_sequence_parallel: bool = False) -> torch.Tensor:
@@ -229,7 +244,8 @@ class DeepEPAll2AllManagerBase(All2AllManagerBase):
         hidden_states: torch.Tensor,
         router_logits: torch.Tensor,
         is_sequence_parallel: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        token_lora_indices: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         raise NotImplementedError
 
     def combine(self, hidden_states: torch.Tensor, is_sequence_parallel: bool = False) -> torch.Tensor:

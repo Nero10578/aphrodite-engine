@@ -48,6 +48,9 @@ class PunicaWrapperGPU(PunicaWrapperBase):
         self.token_mapping_meta = LoRAKernelMeta.make(self.max_loras, max_num_batched_tokens, device=device)
 
         self.prompt_mapping_meta = LoRAKernelMeta.make(self.max_loras, max_batches, device=device)
+        
+        # This will hold the dispatched token_lora_indices when EP is active.
+        self._dispatched_token_lora_indices: torch.Tensor | None = None
 
     def update_metadata(
         self,
@@ -62,8 +65,18 @@ class PunicaWrapperGPU(PunicaWrapperBase):
         self._update_base_metadata(mapping, lora_index_to_id, max_loras, vocab_size, extra_vocab_size)
 
         # Prepare cuda kernel metadata tensors
-        self.token_mapping_meta.prepare_tensors(self.token_lora_indices)
+        # Use dispatched indices if they exist (for EP), otherwise use local ones.
+        indices_to_prepare = self._dispatched_token_lora_indices if self._dispatched_token_lora_indices is not None else self.token_lora_indices
+        self.token_mapping_meta.prepare_tensors(indices_to_prepare)
         self.prompt_mapping_meta.prepare_tensors(self.sampler_indices)
+
+    def set_dispatched_token_lora_indices(self, indices: torch.Tensor | None):
+        """Set the token_lora_indices received from EP dispatch."""
+        self._dispatched_token_lora_indices = indices
+
+    def get_token_lora_indices(self) -> torch.Tensor | None:
+        """Get the current token_lora_indices, preferring dispatched ones for EP."""
+        return self._dispatched_token_lora_indices if self._dispatched_token_lora_indices is not None else self.token_lora_indices
 
     def add_shrink(
         self,

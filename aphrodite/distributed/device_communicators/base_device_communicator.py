@@ -251,12 +251,13 @@ class DeviceCommunicatorBase:
         hidden_states: torch.Tensor,
         router_logits: torch.Tensor,
         is_sequence_parallel: bool = False,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        token_lora_indices: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         """
         Dispatch the hidden states and router logits to the appropriate device.
         This is a no-op in the base class.
         """
-        return hidden_states, router_logits
+        return hidden_states, router_logits, token_lora_indices
 
     def combine(self, hidden_states: torch.Tensor, is_sequence_parallel: bool = False) -> torch.Tensor:
         """

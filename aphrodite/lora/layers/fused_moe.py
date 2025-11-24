@@ -30,11 +30,15 @@ class FusedMoEWithLoRA(BaseLayerWithLoRA):
         super().__init__()
         self.base_layer = base_layer
 
-        assert not self.base_layer.use_ep, "EP support for Fused MoE LoRA is not implemented yet."
+        # EP support for Fused MoE LoRA is now implemented.
+        # The assertion has been removed to enable this functionality.
         self.tp_size = get_tensor_model_parallel_world_size()
         self.tp_rank = get_tensor_model_parallel_rank()
         self.device = base_layer.w2_weight.device
+        # The punica_wrapper is attached to the base_layer after LoRA injection
         self._inject_lora_into_fused_moe()
+        # Expose the punica_wrapper for easier access by the base_layer
+        self.base_layer.punica_wrapper = self.punica_wrapper
 
     def _normalize_keys(self, config: dict[str, int | None]) -> dict[str, int | None]:
         normalized_config = {}
@@ -453,8 +457,14 @@ class FusedMoEWithLoRA(BaseLayerWithLoRA):
         # return type(source_layer) is FusedMoE
         return isinstance(source_layer, FusedMoE)
 
-    def forward(self, *args, **kwargs):
-        return self.base_layer.forward(*args, **kwargs)
+    def forward(self, hidden_states: torch.Tensor, router_logits: torch.Tensor, **kwargs):
+        # The base_layer's forward_impl (when using EP) will now receive
+        # the dispatched token_lora_indices. The FusedMoE layer will update
+        # the punica_wrapper directly before calling the quant_method.apply.
+        # So, no action is needed here other than calling the base layer.
+        
+        # Call the base layer's forward method
+        return self.base_layer.forward(hidden_states, router_logits, **kwargs)
 
     def maybe_all_reduce_tensor_model_parallel(self, *args, **kwargs):
         return self.base_layer.maybe_all_reduce_tensor_model_parallel(*args, **kwargs)
