@@ -605,16 +605,55 @@ class LoRAModelManager:
                 parts = module_name.split(".")
                 replacements = self.packed_modules_mapping[parts[-1]]
                 subloras: list[LoRALayerWeights | None] = []
-                for i, r in enumerate(replacements):
-                    lora = LoRALayerWeights.create_dummy_lora_weights(
-                        module_name + "." + r,
-                        module.lora_a_stacked[i].shape[-1],
-                        module.lora_b_stacked[i].shape[-2],
-                        rank,
-                        module.lora_a_stacked[i].dtype,
-                        "cpu",
-                    )
-                    subloras.append(lora)
+                
+                # Special handling for FusedMoEWithLoRA to correctly calculate
+                # input/output dimensions based on local experts.
+                if isinstance(module, FusedMoEWithLoRA):
+                    # The number of experts in the LoRA weights is determined by the
+                    # checkpoint, but the module's lora_a_stacked is sized for local experts.
+                    # We need to find the correct dimensions for each part of the MoE layer.
+                    # The structure is [w1, w2, w3] for each expert.
+                    num_local_experts = module.base_layer.local_num_experts
+                    # The replacements list contains names like 'w1', 'w2', 'w3' repeated for each expert.
+                    # We need to map these to the correct local expert index.
+                    # Example: replacements = ['w1', 'w2', 'w3', 'w1', 'w2', 'w3', ...]
+                    # We map this to local experts: expert_idx = i // 3, part = replacements[i]
+                    num_global_experts = len(replacements) // 3
+                    for i, r in enumerate(replacements):
+                        local_expert_idx = (i // 3) % num_local_experts
+                        part_idx = i % 3
+                        
+                        # Map part name to the correct stacked tensor and dimension
+                        if part_idx == 0: # w1 (gate_proj)
+                            lora_a_stacked = module.w1_lora_a_stacked
+                            lora_b_stacked = module.w1_lora_b_stacked
+                        elif part_idx == 1: # w2 (down_proj)
+                            lora_a_stacked = module.w2_lora_a_stacked
+                            lora_b_stacked = module.w2_lora_b_stacked
+                        elif part_idx == 2: # w3 (up_proj)
+                            lora_a_stacked = module.w3_lora_a_stacked
+                            lora_b_stacked = module.w3_lora_b_stacked
+                        
+                        lora = LoRALayerWeights.create_dummy_lora_weights(
+                            module_name + "." + r,
+                            lora_a_stacked[0].shape[-1], # input dim is same for all loras
+                            lora_b_stacked[0].shape[-2], # output dim is same for all loras
+                            rank,
+                            lora_a_stacked[0].dtype,
+                            "cpu",
+                        )
+                        subloras.append(lora)
+                else:
+                    for i, r in enumerate(replacements):
+                        lora = LoRALayerWeights.create_dummy_lora_weights(
+                            module_name + "." + r,
+                            module.lora_a_stacked[i].shape[-1],
+                            module.lora_b_stacked[i].shape[-2],
+                            rank,
+                            module.lora_a_stacked[i].dtype,
+                            "cpu",
+                        )
+                        subloras.append(lora)
                 lora = PackedLoRALayerWeights.pack(subloras)
             model.loras[module_name] = lora
         return model
