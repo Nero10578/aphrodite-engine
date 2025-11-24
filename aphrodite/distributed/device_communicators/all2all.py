@@ -148,19 +148,35 @@ class AgRsAll2AllManager(All2AllManagerBase):
         tensors = [hidden_states, router_logits]
         
         # Handle token_lora_indices via side-channel
+        token_lora_indices = None
         if self.punica_wrapper is not None:
             token_lora_indices = self.punica_wrapper.get_ep_dispatch_indices()
-            if token_lora_indices is not None:
-                tensors.append(token_lora_indices)
+
+        if token_lora_indices is not None:
+            tensors.append(token_lora_indices)
+            # The sizes list from dp_metadata is for [hidden_states, router_logits].
+            # We need to extend it for token_lora_indices. Assuming it has the same
+            # chunking as hidden_states.
+            sizes_for_gatherv = [sizes, sizes]
+            # We need to construct the correct sizes list for all_gatherv.
+            # The original `sizes` is a list of lists, where each inner list
+            # contains the chunk sizes for each rank for a given tensor.
+            # e.g., [[h0, h1, ...], [r0, r1, ...]]
+            # We need to add a third entry for token_lora_indices.
+            # Since token_lora_indices has the same shape as hidden_states,
+            # its chunking should be the same.
+            sizes_for_gatherv = [sizes[0], sizes[1], sizes[0]]
+        else:
+            sizes_for_gatherv = sizes
 
         tensors = dist_group.all_gatherv(
             tensors,
             dim=0,
-            sizes=sizes,
+            sizes=sizes_for_gatherv,
         )
 
         # Handle received token_lora_indices via side-channel
-        if self.punica_wrapper is not None and len(tensors) > 2:
+        if self.punica_wrapper is not None and token_lora_indices is not None:
             self.punica_wrapper.set_ep_received_indices(tensors[2])
 
         return tensors[0], tensors[1]
