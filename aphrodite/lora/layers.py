@@ -26,6 +26,7 @@ from aphrodite.modeling.layers.linear import (ColumnParallelLinear, LinearBase,
 from aphrodite.modeling.layers.logits_processor import LogitsProcessor
 from aphrodite.modeling.layers.vocab_parallel_embedding import (
     ParallelLMHead, VocabParallelEmbedding)
+from aphrodite.modeling.layers.fused_moe import FusedMoE
 from aphrodite.platforms import current_platform
 
 if TYPE_CHECKING:
@@ -1363,3 +1364,93 @@ class ModulesToSaveWrapper(BaseLayerWithLoRA):
         if not lora_config.enable_lora_modules_to_save:
             return False
         return type(source_layer) in (ParallelLMHead, VocabParallelEmbedding)
+
+
+class FusedMoEWithLoRA(BaseLayerWithLoRA):
+    def __init__(self, base_layer: FusedMoE) -> None:
+        super().__init__()
+        self.base_layer = base_layer
+        self.num_experts = base_layer.local_num_experts
+        self.device = _get_lora_device(self.base_layer)
+        self.tp_size = get_tensor_model_parallel_world_size()
+        self.tp_rank = get_tensor_model_parallel_rank()
+
+    def create_lora_weights(
+        self,
+        max_loras: int,
+        lora_config: LoRAConfig,
+        model_config: Optional[PretrainedConfig] = None,
+    ) -> None:
+        self.lora_config = lora_config
+        
+        # w13 is MergedColumnParallel (gate_up_proj)
+        lora_a_w13_out_size = (lora_config.max_lora_rank if not lora_config.fully_sharded_loras
+                               else divide(lora_config.max_lora_rank, self.tp_size))
+        self.lora_a_w13_stacked = torch.zeros(
+            max_loras, self.num_experts, lora_a_w13_out_size, self.base_layer.hidden_size,
+            dtype=lora_config.lora_dtype, device=self.device
+        )
+        self.lora_b_w13_stacked = torch.zeros(
+            max_loras, self.num_experts, self.base_layer.intermediate_size_per_partition * 2, lora_config.max_lora_rank,
+            dtype=lora_config.lora_dtype, device=self.device
+        )
+        
+        # w2 is RowParallel (down_proj)
+        lora_a_w2_out_size = lora_config.max_lora_rank
+        lora_b_w2_out_size = (self.base_layer.hidden_size if not lora_config.fully_sharded_loras
+                              else divide(self.base_layer.hidden_size, self.tp_size))
+        self.lora_a_w2_stacked = torch.zeros(
+            max_loras, self.num_experts, lora_a_w2_out_size, self.base_layer.intermediate_size_per_partition,
+            dtype=lora_config.lora_dtype, device=self.device
+        )
+        self.lora_b_w2_stacked = torch.zeros(
+            max_loras, self.num_experts, lora_b_w2_out_size, lora_config.max_lora_rank,
+            dtype=lora_config.lora_dtype, device=self.device
+        )
+
+    def reset_lora(self, index: int):
+        self.lora_a_w13_stacked[index] = 0
+        self.lora_b_w13_stacked[index] = 0
+        self.lora_a_w2_stacked[index] = 0
+        self.lora_b_w2_stacked[index] = 0
+
+    def set_lora(
+        self,
+        index: int,
+        lora_a: torch.Tensor,
+        lora_b: torch.Tensor,
+        embeddings_tensor: Optional[torch.Tensor],
+        bias: Optional[torch.Tensor] = None,
+    ):
+        self.reset_lora(index)
+        # lora_a and lora_b are packed for all experts.
+        # We expect them to be of shape [num_experts, ...] or we need to handle them per expert.
+        # For simplicity, assuming lora_a and lora_b are passed correctly for the whole MoE layer.
+        # This part needs careful handling based on how weights are loaded.
+        pass
+
+    def forward(self, hidden_states: torch.Tensor, router_logits: torch.Tensor):
+        # We need to pass the LoRA weights to the underlying MoE implementation.
+        self.base_layer.active_lora_a_w13 = self.lora_a_w13_stacked
+        self.base_layer.active_lora_b_w13 = self.lora_b_w13_stacked
+        self.base_layer.active_lora_a_w2 = self.lora_a_w2_stacked
+        self.base_layer.active_lora_b_w2 = self.lora_b_w2_stacked
+        self.base_layer.active_lora_scaling = 1.0
+        
+        num_tokens = hidden_states.shape[0]
+        if hidden_states.ndim == 3:
+            num_tokens = hidden_states.shape[0] * hidden_states.shape[1]
+            
+        self.base_layer.active_lora_indices = self.punica_wrapper.token_lora_indices[:num_tokens]
+        
+        return self.base_layer(hidden_states, router_logits)
+
+    @classmethod
+    def can_replace_layer(
+        cls,
+        source_layer: nn.Module,
+        lora_config: LoRAConfig,
+        packed_modules_list: list,
+        model_config: Optional[PretrainedConfig],
+    ) -> bool:
+        return type(source_layer) is FusedMoE

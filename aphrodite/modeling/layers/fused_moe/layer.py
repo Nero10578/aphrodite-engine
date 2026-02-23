@@ -508,6 +508,14 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, CustomOp):
             if envs.APHRODITE_ENABLE_LORA_ON_MOE:
                 from aphrodite.modeling.layers.fused_moe.moe_torch_iterative import (
                     fused_moe as fused_moe_torch_iterative)
+                
+                lora_a_w13 = getattr(layer, "active_lora_a_w13", None)
+                lora_b_w13 = getattr(layer, "active_lora_b_w13", None)
+                lora_a_w2 = getattr(layer, "active_lora_a_w2", None)
+                lora_b_w2 = getattr(layer, "active_lora_b_w2", None)
+                scaling = getattr(layer, "active_lora_scaling", 1.0)
+                lora_indices = getattr(layer, "active_lora_indices", None)
+
                 return fused_moe_torch_iterative(
                     hidden_states=x,
                     w1=layer.w13_weight,
@@ -521,6 +529,12 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, CustomOp):
                     scoring_func=scoring_func,
                     routed_scaling_factor=routed_scaling_factor,
                     e_score_correction_bias=e_score_correction_bias,
+                    lora_a_w13=lora_a_w13,
+                    lora_b_w13=lora_b_w13,
+                    lora_a_w2=lora_a_w2,
+                    lora_b_w2=lora_b_w2,
+                    scaling=scaling,
+                    lora_indices=lora_indices,
                 )
             assert fused_experts is not None
             return fused_experts(

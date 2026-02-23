@@ -68,6 +68,12 @@ def _moe_lora(
     global_num_experts: int,
     expert_map: torch.Tensor = None,
     renormalize: bool = False,
+    lora_a_w13: torch.Tensor = None,
+    lora_b_w13: torch.Tensor = None,
+    lora_a_w2: torch.Tensor = None,
+    lora_b_w2: torch.Tensor = None,
+    scaling: float = 1.0,
+    lora_indices: torch.Tensor = None,
 ) -> torch.Tensor:
     """
     Args:
@@ -99,17 +105,82 @@ def _moe_lora(
     for expert_idx in range(num_experts):
         expert_w1 = w1[expert_idx]
         expert_w2 = w2[expert_idx]
+        
         expert_mask = (selected_experts == expert_idx)
         expert_weights = (topk_weights * expert_mask).sum(dim=-1, keepdim=True)
-        x = F.linear(hidden_states, expert_w1)
+        
+        # Only process tokens that are routed to this expert
+        token_mask = expert_mask.any(dim=-1)
+        if not token_mask.any():
+            continue
+            
+        expert_hidden_states = hidden_states[token_mask]
+        
+        if lora_indices is not None and lora_a_w13 is not None and lora_b_w13 is not None:
+            # Batched LoRA application
+            expert_lora_indices = lora_indices[token_mask]
+            
+            # Base linear
+            x = F.linear(expert_hidden_states, expert_w1)
+            
+            # Add LoRA
+            # lora_a_w13: [max_loras, num_experts, rank, in_features]
+            # lora_b_w13: [max_loras, num_experts, out_features, rank]
+            for lora_id in torch.unique(expert_lora_indices):
+                if lora_id < 0:
+                    continue
+                lora_mask = expert_lora_indices == lora_id
+                if not lora_mask.any():
+                    continue
+                
+                a = lora_a_w13[lora_id, expert_idx]
+                b = lora_b_w13[lora_id, expert_idx]
+                
+                lora_out = F.linear(F.linear(expert_hidden_states[lora_mask], a), b) * scaling
+                x[lora_mask] += lora_out
+        else:
+            if lora_a_w13 is not None and lora_b_w13 is not None:
+                # Single LoRA fallback (if lora_indices not provided but weights are)
+                expert_w1 = expert_w1 + (lora_b_w13[0, expert_idx] @ lora_a_w13[0, expert_idx]) * scaling
+            x = F.linear(expert_hidden_states, expert_w1)
+            
         gate = F.silu(x[:, :intermediate_size])
         x = x[:, intermediate_size:] * gate
-        x = F.linear(x, expert_w2)
-        current_hidden_states = x * expert_weights
+        
+        if lora_indices is not None and lora_a_w2 is not None and lora_b_w2 is not None:
+            # Base linear
+            out = F.linear(x, expert_w2)
+            
+            # Add LoRA
+            for lora_id in torch.unique(expert_lora_indices):
+                if lora_id < 0:
+                    continue
+                lora_mask = expert_lora_indices == lora_id
+                if not lora_mask.any():
+                    continue
+                
+                a = lora_a_w2[lora_id, expert_idx]
+                b = lora_b_w2[lora_id, expert_idx]
+                
+                lora_out = F.linear(F.linear(x[lora_mask], a), b) * scaling
+                out[lora_mask] += lora_out
+            x = out
+        else:
+            if lora_a_w2 is not None and lora_b_w2 is not None:
+                expert_w2 = expert_w2 + (lora_b_w2[0, expert_idx] @ lora_a_w2[0, expert_idx]) * scaling
+            x = F.linear(x, expert_w2)
+            
+        current_hidden_states = torch.zeros_like(hidden_states)
+        current_hidden_states[token_mask] = x
+        current_hidden_states = current_hidden_states * expert_weights
+        
         if final_hidden_states is None:
             final_hidden_states = current_hidden_states
         else:
             final_hidden_states = final_hidden_states + current_hidden_states
+
+    if final_hidden_states is None:
+        final_hidden_states = torch.zeros_like(hidden_states)
 
     return final_hidden_states.view(orig_shape)  # type: ignore
 
@@ -131,10 +202,18 @@ def fused_moe(
     e_score_correction_bias: torch.Tensor = None,
     global_num_experts: int = None,
     expert_map: torch.Tensor = None,
+    lora_a_w13: torch.Tensor = None,
+    lora_b_w13: torch.Tensor = None,
+    lora_a_w2: torch.Tensor = None,
+    lora_b_w2: torch.Tensor = None,
+    scaling: float = 1.0,
+    lora_indices: torch.Tensor = None,
 ) -> torch.Tensor:
     if envs.APHRODITE_ENABLE_LORA_ON_MOE:
         return _moe_lora(hidden_states, w1, w2, gating_output, topk,
-                         global_num_experts, expert_map, renormalize)
+                         global_num_experts, expert_map, renormalize,
+                         lora_a_w13, lora_b_w13, lora_a_w2, lora_b_w2, scaling,
+                         lora_indices)
     return _moe_regular(hidden_states, w1, w2, gating_output, topk,
                         renormalize, inplace, override_config,
                         use_grouped_topk, num_expert_group, topk_group,

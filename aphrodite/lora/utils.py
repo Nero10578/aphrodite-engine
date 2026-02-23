@@ -24,8 +24,10 @@ from aphrodite.lora.layers import (BaseLayerWithLoRA,
                                    QKVParallelLinearWithLoRA,
                                    ReplicatedLinearWithLoRA,
                                    RowParallelLinearWithLoRA,
-                                   VocabParallelEmbeddingWithLoRA)
+                                   VocabParallelEmbeddingWithLoRA,
+                                   FusedMoEWithLoRA)
 from aphrodite.modeling.layers.linear import LinearBase
+from aphrodite.modeling.layers.fused_moe import FusedMoE
 
 if TYPE_CHECKING:
     from aphrodite.modeling.layers.logits_processor import LogitsProcessor
@@ -47,6 +49,7 @@ _all_lora_classes: set[type[BaseLayerWithLoRA]] = {
     MergedColumnParallelLinearWithShardedLoRA,
     MergedQKVParallelLinearWithShardedLoRA,
     RowParallelLinearWithShardedLoRA,
+    FusedMoEWithLoRA,
 }
 
 
@@ -214,7 +217,7 @@ def get_supported_lora_modules(model: nn.Module) -> list[str]:
                 supported_lora_modules.add(name)
 
         # get all the linear subfixes.
-        if isinstance(module, (LinearBase, )):
+        if isinstance(module, (LinearBase, FusedMoE)):
             supported_lora_modules.add(name.split(".")[-1])
 
     return list(supported_lora_modules)
