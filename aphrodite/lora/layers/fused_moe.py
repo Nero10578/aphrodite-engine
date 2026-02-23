@@ -30,9 +30,8 @@ class FusedMoEWithLoRA(BaseLayerWithLoRA):
         super().__init__()
         self.base_layer = base_layer
 
-        assert not self.base_layer.use_ep, "EP support for Fused MoE LoRA is not implemented yet."
-        self.tp_size = get_tensor_model_parallel_world_size()
-        self.tp_rank = get_tensor_model_parallel_rank()
+        self.tp_size = self.base_layer.tp_size
+        self.tp_rank = self.base_layer.tp_rank
         self.device = base_layer.w2_weight.device
         self._inject_lora_into_fused_moe()
 
@@ -386,6 +385,12 @@ class FusedMoEWithLoRA(BaseLayerWithLoRA):
             if w1_lora_a is None or w2_lora_a is None or w3_lora_a is None:
                 continue
 
+            local_eid = eid
+            if self.base_layer.use_ep:
+                local_eid = self.base_layer.expert_map[eid].item()
+                if local_eid == -1:
+                    continue
+
             if self.tp_size > 1:
                 shard_size = self.base_layer.intermediate_size_per_partition
                 start_idx = self.tp_rank * shard_size
@@ -395,25 +400,25 @@ class FusedMoEWithLoRA(BaseLayerWithLoRA):
                 w3_lora_b = w3_lora_b[start_idx:end_idx, :]
                 w2_lora_a = w2_lora_a[:, start_idx:end_idx]
 
-            self.w1_lora_a_stacked[index, eid, : w1_lora_a.shape[0], : w1_lora_a.shape[1]].copy_(
+            self.w1_lora_a_stacked[index, local_eid, : w1_lora_a.shape[0], : w1_lora_a.shape[1]].copy_(
                 w1_lora_a, non_blocking=True
             )
 
-            self.w3_lora_a_stacked[index, eid, : w3_lora_a.shape[0], : w3_lora_a.shape[1]].copy_(
+            self.w3_lora_a_stacked[index, local_eid, : w3_lora_a.shape[0], : w3_lora_a.shape[1]].copy_(
                 w3_lora_a, non_blocking=True
             )
 
-            self.w2_lora_b_stacked[index, eid, : w2_lora_b.shape[0], : w2_lora_b.shape[1]].copy_(
+            self.w2_lora_b_stacked[index, local_eid, : w2_lora_b.shape[0], : w2_lora_b.shape[1]].copy_(
                 w2_lora_b, non_blocking=True
             )
 
-            self.w1_lora_b_stacked[index, eid, : w1_lora_b.shape[0], : w1_lora_b.shape[1]].copy_(
+            self.w1_lora_b_stacked[index, local_eid, : w1_lora_b.shape[0], : w1_lora_b.shape[1]].copy_(
                 w1_lora_b, non_blocking=True
             )
-            self.w3_lora_b_stacked[index, eid, : w3_lora_b.shape[0], : w3_lora_b.shape[1]].copy_(
+            self.w3_lora_b_stacked[index, local_eid, : w3_lora_b.shape[0], : w3_lora_b.shape[1]].copy_(
                 w3_lora_b, non_blocking=True
             )
-            self.w2_lora_a_stacked[index, eid, : w2_lora_a.shape[0], : w2_lora_a.shape[1]].copy_(
+            self.w2_lora_a_stacked[index, local_eid, : w2_lora_a.shape[0], : w2_lora_a.shape[1]].copy_(
                 w2_lora_a, non_blocking=True
             )
 
