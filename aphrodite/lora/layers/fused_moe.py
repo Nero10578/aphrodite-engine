@@ -100,11 +100,14 @@ class FusedMoEWithLoRA(BaseLayerWithLoRA):
         self.base_layer.ensure_moe_quant_config_init()
         quant_config = self.base_layer.quant_method.moe_quant_config
 
-        m_fused_moe_fn = (
-            modular_triton_fused_moe(quant_config, shared_experts=self.base_layer.shared_experts)
-            if not quant_config.use_mxfp4_w4a16
-            else modular_marlin_fused_moe(quant_config, shared_experts=self.base_layer.shared_experts)
-        )
+        if self.base_layer.quant_method.fused_experts is not None:
+            m_fused_moe_fn = self.base_layer.quant_method.fused_experts
+        else:
+            m_fused_moe_fn = (
+                modular_triton_fused_moe(quant_config, shared_experts=self.base_layer.shared_experts)
+                if not quant_config.use_mxfp4_w4a16
+                else modular_marlin_fused_moe(quant_config, shared_experts=self.base_layer.shared_experts)
+            )
 
         def fwd_decorator(layer, func):
             def wrapper(*args, **kwargs):
@@ -159,7 +162,7 @@ class FusedMoEWithLoRA(BaseLayerWithLoRA):
                     curr_topk_ids,
                     num_tokens,
                     shrink_config["BLOCK_SIZE_M"],
-                    self.base_layer.local_num_experts,
+                    self.base_layer.global_num_experts,
                     max_loras,
                     self.adapter_enabled,
                     expert_map,

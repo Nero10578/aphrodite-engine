@@ -335,7 +335,8 @@ class PunicaWrapperGPU(PunicaWrapperBase):
             lora_ids,
         )
         if expert_map is not None:
-            expert_ids = expert_map[expert_ids]
+            valid_mask = expert_ids >= 0
+            expert_ids = torch.where(valid_mask, expert_map[expert_ids.clamp(min=0)], expert_ids)
 
         return sorted_ids, expert_ids, num_tokens_post_pad
 
