@@ -341,6 +341,7 @@ class FusedMoEWithLoRA(BaseLayerWithLoRA):
         # to create a dummy LoRA weights.
         self.lora_a_stacked = []
         self.lora_b_stacked = []
+        print(f"DEBUG: create_lora_weights called with max_loras={max_loras}, local_num_experts={self.base_layer.local_num_experts}")
         for lora_id in range(max_loras):
             for experts_id in range(self.base_layer.local_num_experts):
                 # gate_proj,down_proj,up_proj
