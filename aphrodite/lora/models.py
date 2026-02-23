@@ -587,6 +587,7 @@ class LoRAModelManager:
                         embeddings_tensor_dim=embeddings_tensor_dim,
                     )
                 else:
+                    print(f"DEBUG: create_dummy_lora for {module_name}, type={type(module)}, len(lora_a_stacked)={len(module.lora_a_stacked) if isinstance(module.lora_a_stacked, list) else 'not a list'}")
                     lora = LoRALayerWeights.create_dummy_lora_weights(
                         module_name,
                         module.lora_a_stacked[0].shape[-1],

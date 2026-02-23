@@ -271,6 +271,7 @@ class FusedMoEWithLoRA(BaseLayerWithLoRA):
         model_config: PretrainedConfig | None = None,
     ) -> None:
         """Initializes lora matrices."""
+        print(f"DEBUG: FusedMoEWithLoRA.create_lora_weights called with max_loras={max_loras}, local_num_experts={self.base_layer.local_num_experts}")
 
         self.adapter_enabled = torch.tensor([0] * (max_loras + 1), dtype=torch.int, device=self.device)
 
