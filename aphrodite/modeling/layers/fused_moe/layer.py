@@ -2059,12 +2059,15 @@ class FusedMoE(CustomOp):
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         og_hidden_states = hidden_states.shape[-1]
         if self.hidden_size != og_hidden_states:
-            hidden_states = F.pad(
-                hidden_states,
-                (0, self.hidden_size - og_hidden_states),
-                mode="constant",
-                value=0.0,
-            )
+            # Only pad if the hidden_states is smaller than self.hidden_size
+            # If it's larger (e.g. padded with lora indices), don't crop it here
+            if self.hidden_size > og_hidden_states:
+                hidden_states = F.pad(
+                    hidden_states,
+                    (0, self.hidden_size - og_hidden_states),
+                    mode="constant",
+                    value=0.0,
+                )
 
         if self.shared_experts is None:
             if current_platform.is_tpu():
