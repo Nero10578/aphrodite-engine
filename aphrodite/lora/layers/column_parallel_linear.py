@@ -204,35 +204,44 @@ class MergedColumnParallelLinearWithLoRA(ColumnParallelLinearWithLoRA):
             for output_size in self.output_slices
         )
 
-    def slice_lora_a(self, lora_a: list[torch.Tensor | None]) -> list[torch.Tensor | None]:
+    def slice_lora_a(self, lora_a: list[torch.Tensor | None] | torch.Tensor) -> list[torch.Tensor | None]:
+        if isinstance(lora_a, torch.Tensor):
+            lora_a = [lora_a] * self.n_slices
         return lora_a
 
-    def slice_lora_b(self, lora_b: list[torch.Tensor | None]) -> list[torch.Tensor | None]:
+    def slice_lora_b(self, lora_b: list[torch.Tensor | None] | torch.Tensor) -> list[torch.Tensor | None]:
         sliced_lora_b = [None] * self.n_slices
+        if isinstance(lora_b, torch.Tensor):
+            lora_b = [lora_b] * self.n_slices
         for i, (shard_id, shard_size) in enumerate(zip(self.output_ids, self.output_slices)):
-            if (lora_b_i := lora_b[i]) is not None:
+            if i < len(lora_b) and (lora_b_i := lora_b[i]) is not None:
                 sliced_lora_b[i] = lora_b_i[shard_size * shard_id : shard_size * (shard_id + 1), :]
         return sliced_lora_b
 
     def set_lora(
         self,
         index: int,
-        lora_a: torch.Tensor,
-        lora_b: torch.Tensor,
+        lora_a: torch.Tensor | list[torch.Tensor | None],
+        lora_b: torch.Tensor | list[torch.Tensor | None],
         embeddings_tensor: torch.Tensor | None,
     ):
         self.reset_lora(index)
+
+        if isinstance(lora_a, torch.Tensor):
+            lora_a = [lora_a] * self.n_slices
+        if isinstance(lora_b, torch.Tensor):
+            lora_b = [lora_b] * self.n_slices
 
         if self.tp_size > 1:
             lora_a = self.slice_lora_a(lora_a)
             lora_b = self.slice_lora_b(lora_b)
 
         for i in range(self.n_slices):
-            if (lora_a_i := lora_a[i]) is not None:
+            if i < len(lora_a) and (lora_a_i := lora_a[i]) is not None:
                 self.lora_a_stacked[i][index, 0, : lora_a_i.shape[0], : lora_a_i.shape[1]].copy_(
                     lora_a_i, non_blocking=True
                 )
-            if (lora_b_i := lora_b[i]) is not None:
+            if i < len(lora_b) and (lora_b_i := lora_b[i]) is not None:
                 self.lora_b_stacked[i][index, 0, : lora_b_i.shape[0], : lora_b_i.shape[1]].copy_(
                     lora_b_i, non_blocking=True
                 )
@@ -414,13 +423,15 @@ class MergedColumnParallelLinearWithShardedLoRA(MergedColumnParallelLinearWithLo
     Based on S-LoRA, slicing happens along the rank dim.
     """
 
-    def slice_lora_a(self, lora_a: list[torch.Tensor | None]) -> list[torch.Tensor | None]:
+    def slice_lora_a(self, lora_a: list[torch.Tensor | None] | torch.Tensor) -> list[torch.Tensor | None]:
+        if isinstance(lora_a, torch.Tensor):
+            lora_a = [lora_a] * self.n_slices
         # NOTE: lora_a contains 2 subloras, and each sublora could be None.
         output_shard_size = self.lora_a_stacked[0].shape[2]
         output_start_idx = self.tp_rank * output_shard_size
         lora_a = [
-            lora_a[0][output_start_idx : output_start_idx + output_shard_size, :] if lora_a[0] is not None else None,
-            lora_a[1][output_start_idx : output_start_idx + output_shard_size, :] if lora_a[1] is not None else None,
+            lora_a[0][output_start_idx : output_start_idx + output_shard_size, :] if len(lora_a) > 0 and lora_a[0] is not None else None,
+            lora_a[1][output_start_idx : output_start_idx + output_shard_size, :] if len(lora_a) > 1 and lora_a[1] is not None else None,
         ]
         return lora_a
 
@@ -490,14 +501,16 @@ class MergedQKVParallelLinearWithShardedLoRA(MergedQKVParallelLinearWithLoRA):
     Based on S-LoRA, slicing happens along the rank dim.
     """
 
-    def slice_lora_a(self, lora_a: list[torch.Tensor | None]) -> list[torch.Tensor | None]:
+    def slice_lora_a(self, lora_a: list[torch.Tensor | None] | torch.Tensor) -> list[torch.Tensor | None]:
+        if isinstance(lora_a, torch.Tensor):
+            lora_a = [lora_a] * self.n_slices
         # NOTE: lora_a contains 3 subloras, and each sublora could be None.
         shard_size = [self.lora_a_stacked[i].shape[2] for i in range(3)]
         start_idx = [self.tp_rank * shard_size[i] for i in range(3)]
         lora_a = [
-            lora_a[0][start_idx[0] : start_idx[0] + shard_size[0], :] if lora_a[0] is not None else None,
-            lora_a[1][start_idx[1] : start_idx[1] + shard_size[1], :] if lora_a[1] is not None else None,
-            lora_a[2][start_idx[2] : start_idx[2] + shard_size[2], :] if lora_a[2] is not None else None,
+            lora_a[0][start_idx[0] : start_idx[0] + shard_size[0], :] if len(lora_a) > 0 and lora_a[0] is not None else None,
+            lora_a[1][start_idx[1] : start_idx[1] + shard_size[1], :] if len(lora_a) > 1 and lora_a[1] is not None else None,
+            lora_a[2][start_idx[2] : start_idx[2] + shard_size[2], :] if len(lora_a) > 2 and lora_a[2] is not None else None,
         ]
         return lora_a
 
