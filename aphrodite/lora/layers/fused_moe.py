@@ -608,7 +608,10 @@ class FusedMoEWithLoRA(BaseLayerWithLoRA):
         """Returns True if the layer can be replaced by this LoRA layer."""
 
         # source_layer is FusedMoE or SharedFusedMoE
-        return isinstance(source_layer, FusedMoE) and len(packed_modules_list) == 2
+        # For experts, packed_modules_list contains expert weight names
+        # For regular layers, it contains packed module names like ["gate_proj", "up_proj"]
+        # We accept FusedMoE layers regardless of packed_modules_list length
+        return isinstance(source_layer, FusedMoE)
 
     def forward(self, *args, **kwargs):
         return self.base_layer.forward(*args, **kwargs)
