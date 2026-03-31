@@ -522,6 +522,11 @@ class Glm4MoeModel(nn.Module):
                     if is_pp_missing_parameter(name_mapped, self):
                         continue
 
+                    # Check if the parameter exists in params_dict
+                    # When EP is enabled, not all expert weights exist on this rank
+                    if name_mapped not in params_dict:
+                        continue
+
                     param = params_dict[name_mapped]
                     # We should ask the weight loader to return success or not
                     # here since otherwise we may skip experts with other
