@@ -98,7 +98,7 @@ class FusedMoEWithLoRA(BaseLayerWithLoRA):
                 top_k=top_k,
                 dtype=config_dtype,
                 M=M,
-                block_shape=layer.quant_method.moe_quant_config.block_shape,
+                block_shape=layer.moe_quant_config.block_shape,
             )
             expand_config = try_get_optimal_moe_lora_config(
                 op_type=f"fused_moe_lora_{op_prefix}_expand",
@@ -108,7 +108,7 @@ class FusedMoEWithLoRA(BaseLayerWithLoRA):
                 top_k=top_k,
                 dtype=config_dtype,
                 M=M,
-                block_shape=layer.quant_method.moe_quant_config.block_shape,
+                block_shape=layer.moe_quant_config.block_shape,
             )
         shrink_config = self._normalize_keys(shrink_config)
         expand_config = self._normalize_keys(expand_config)
@@ -119,7 +119,7 @@ class FusedMoEWithLoRA(BaseLayerWithLoRA):
         top_k = self.base_layer.top_k
 
         self.base_layer.ensure_moe_quant_config_init()
-        quant_config = self.base_layer.quant_method.moe_quant_config
+        quant_config = self.base_layer.moe_quant_config
 
         m_fused_moe_fn = (
             modular_triton_fused_moe(quant_config, shared_experts=self.base_layer.shared_experts)
